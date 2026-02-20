@@ -13,9 +13,10 @@ LOGFILE="$HOME/.vault_sync.log"
 SYNC_TRIGGER="manual"
 NOTIFY_MODE="auto"
 SYNC_LABEL="[Obsidian<->GDrive]"
+FORCE_MODE=false
 
 usage() {
-    echo "用法: $0 [--trigger=manual|timer|watcher] [--notify=auto|on|off]"
+    echo "用法: $0 [--trigger=manual|timer|watcher] [--notify=auto|on|off] [--force]"
 }
 
 format_summary() {
@@ -80,6 +81,10 @@ while [[ $# -gt 0 ]]; do
         --notify)
             shift
             NOTIFY_MODE="${1:-}"
+            shift
+            ;;
+        --force)
+            FORCE_MODE=true
             shift
             ;;
         -h|--help)
@@ -168,11 +173,18 @@ SYNC_START_TS=$(date +%s)
 # --resilient              : 遇到小錯誤不中斷整個程序
 # -v                       : 輸出詳細資訊供日誌記錄
 set +e
-OUTPUT=$(rclone bisync "$REMOTE" "$LOCAL" \
-    --conflict-resolve newer \
-    --create-empty-src-dirs \
-    --resilient \
-    -v 2>&1)
+RCLONE_ARGS=(
+    --conflict-resolve newer
+    --create-empty-src-dirs
+    --resilient
+    -v
+)
+
+if [[ "$FORCE_MODE" == true ]]; then
+    RCLONE_ARGS+=(--force)
+fi
+
+OUTPUT=$(rclone bisync "$REMOTE" "$LOCAL" "${RCLONE_ARGS[@]}" 2>&1)
 EXIT_CODE=$?
 set -e
 
@@ -188,12 +200,7 @@ if [[ $EXIT_CODE -ne 0 ]] && [[ $OUTPUT == *"--resync"* ]]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [系統] 偵測到需要初次綁定，自動切換至 --resync 模式..." >> "$LOGFILE"
     
     set +e
-    RESYNC_OUTPUT=$(rclone bisync "$REMOTE" "$LOCAL" \
-        --resync \
-        --conflict-resolve newer \
-        --create-empty-src-dirs \
-        --resilient \
-        -v 2>&1)
+    RESYNC_OUTPUT=$(rclone bisync "$REMOTE" "$LOCAL" --resync "${RCLONE_ARGS[@]}" 2>&1)
     RESYNC_CODE=$?
     set -e
 
