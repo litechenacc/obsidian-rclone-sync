@@ -12,9 +12,54 @@ LOCKFILE="/tmp/rclone_vault_sync.lock"
 LOGFILE="$HOME/.vault_sync.log"
 SYNC_TRIGGER="manual"
 NOTIFY_MODE="auto"
+SYNC_LABEL="[Obsidian<->GDrive]"
 
 usage() {
     echo "用法: $0 [--trigger=manual|timer|watcher] [--notify=auto|on|off]"
+}
+
+format_summary() {
+    local changes="$1"
+    local new="$2"
+    local newer="$3"
+    local older="$4"
+    local deleted="$5"
+    local value
+    local detail
+
+    if [[ -z "$changes" ]]; then
+        value="-"
+        detail=""
+    elif [[ "$changes" -eq 0 ]]; then
+        value="no change needed"
+        detail="new 0, newer 0, older 0, del 0"
+    else
+        value="$changes files"
+        detail="new $new, newer $newer, older $older, del $deleted"
+    fi
+
+    printf "%s|%s\n" "$value" "$detail"
+}
+
+render_table() {
+    local rows=()
+    local row
+
+    rows+=(" |Label|Value|Detail")
+    rows+=("$1")
+    rows+=("$2")
+    rows+=("$3")
+    rows+=("$4")
+    rows+=("$5")
+    rows+=("$6")
+
+    if command -v column &> /dev/null; then
+        printf '%s\n' "${rows[@]}" | column -t -s '|'
+    else
+        for row in "${rows[@]}"; do
+            echo "${row//|/ | }"
+        done
+    fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -100,11 +145,20 @@ check_reqs
 exec 200>$LOCKFILE
 if ! flock -n 200; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - [跳過] 另一個同步程序正在進行中。" >> "$LOGFILE"
+    if [[ "$SYNC_TRIGGER" == "manual" ]]; then
+        echo "⏸️  $SYNC_LABEL 同步正在進行中，請稍後再試。"
+    fi
     exit 0
 fi
 
 echo "=========================================" >> "$LOGFILE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') - 開始同步..." >> "$LOGFILE"
+
+if [[ "$SYNC_TRIGGER" == "manual" ]]; then
+    echo "🟡 $SYNC_LABEL 同步啟動中..."
+    echo "⏳ Running rclone bisync (trigger: $SYNC_TRIGGER)"
+    echo "🧾 Log: $LOGFILE"
+fi
 
 SYNC_START_TS=$(date +%s)
 
@@ -193,6 +247,18 @@ while IFS= read -r line; do
     fi
 done <<< "$FINAL_OUTPUT"
 
+IFS='|' read -r up_value up_detail < <(format_summary "$path2_changes" "$path2_new" "$path2_newer" "$path2_older" "$path2_deleted")
+IFS='|' read -r down_value down_detail < <(format_summary "$path1_changes" "$path1_new" "$path1_newer" "$path1_older" "$path1_deleted")
+
+up_summary="$up_value"
+down_summary="$down_value"
+if [[ -n "$up_detail" ]]; then
+    up_summary="$up_summary ($up_detail)"
+fi
+if [[ -n "$down_detail" ]]; then
+    down_summary="$down_summary ($down_detail)"
+fi
+
 notify_enabled=false
 if [[ "$NOTIFY_MODE" == "on" ]]; then
     notify_enabled=true
@@ -209,42 +275,38 @@ elif [[ "$NOTIFY_MODE" == "auto" ]]; then
 fi
 
 if [[ "$notify_enabled" == true ]] && command -v notify-send &> /dev/null; then
-    up_summary="n/a"
-    down_summary="n/a"
-
-    if [[ -n "$path2_changes" ]]; then
-        up_summary="$path2_changes (new $path2_new, newer $path2_newer, older $path2_older, deleted $path2_deleted)"
-    fi
-    if [[ -n "$path1_changes" ]]; then
-        down_summary="$path1_changes (new $path1_new, newer $path1_newer, older $path1_older, deleted $path1_deleted)"
-    fi
-
-    notify_title="[Obsidian<->GDrive]"
-    notify_body="Trigger: $SYNC_TRIGGER\nUp: $up_summary\nDown: $down_summary\nTime: ${SYNC_DURATION}s"
+    notify_title="$SYNC_LABEL"
+    notify_body="󰜎 $SYNC_TRIGGER\n󰁞 $up_summary\n󰁆 $down_summary\n󱑂 ${SYNC_DURATION}s"
     if [[ "$RESYNC_USED" == true ]]; then
-        notify_body="$notify_body\nMode: resync"
+        notify_body="$notify_body\n󰆺 resync"
     fi
 
     if [[ $FINAL_EXIT_CODE -eq 0 ]]; then
         notify_send_body="$notify_body"
     else
-        notify_send_body="ERROR\n$notify_body"
+        notify_send_body="󰗠 ERROR\n$notify_body"
     fi
     notify-send "$notify_title" "$notify_send_body"
 fi
 
 if [[ "$SYNC_TRIGGER" == "manual" ]]; then
-    echo "[Obsidian<->GDrive]"
-    echo "Trigger: $SYNC_TRIGGER"
-    echo "Up: $up_summary"
-    echo "Down: $down_summary"
-    echo "Time: ${SYNC_DURATION}s"
+    mode_value="normal"
+    status_value="OK"
+    status_detail=""
     if [[ "$RESYNC_USED" == true ]]; then
-        echo "Mode: resync"
+        mode_value="resync"
     fi
     if [[ $FINAL_EXIT_CODE -ne 0 ]]; then
-        echo "Status: ERROR"
-    else
-        echo "Status: OK"
+        status_value="ERROR"
+        status_detail="check $LOGFILE"
     fi
+
+    echo "🗂️  $SYNC_LABEL"
+    render_table \
+        "󰜎|Trigger|$SYNC_TRIGGER|" \
+        "󰁞|Up|$up_value|$up_detail" \
+        "󰁆|Down|$down_value|$down_detail" \
+        "󱑂|Time|${SYNC_DURATION}s|" \
+        "󰆺|Mode|$mode_value|" \
+        "󰗠|Status|$status_value|$status_detail"
 fi
