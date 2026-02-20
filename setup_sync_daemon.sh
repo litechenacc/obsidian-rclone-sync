@@ -43,7 +43,7 @@ Description=Obsidian Vault Periodic Sync
 
 [Service]
 Type=oneshot
-ExecStart=$SYNC_SCRIPT
+ExecStart=$SYNC_SCRIPT --trigger=timer --notify=auto
 EOF
 
     # 2. 建立 15 分鐘的 Timer
@@ -69,9 +69,9 @@ Description=Obsidian Vault Watcher & Login/Logout Sync
 
 [Service]
 Type=simple
-ExecStartPre=-"$SYNC_SCRIPT"
-ExecStart=/bin/bash -c "while inotifywait -qq -r -e close_write,moved_to,moved_from,delete --exclude '\\.obsidian/workspace(\\.json|-[^/]+)?' '$VAULT_DIR'; do sleep 5; '$SYNC_SCRIPT'; done"
-ExecStopPost=-"$SYNC_SCRIPT"
+ExecStartPre=-$SYNC_SCRIPT --trigger=watcher --notify=auto
+ExecStart=/bin/bash -c "while inotifywait -qq -r -e close_write,moved_to,moved_from,delete --exclude '\\.obsidian/workspace(\\.json|-[^/]+)?' '$VAULT_DIR'; do sleep 5; '$SYNC_SCRIPT' --trigger=watcher --notify=auto; done"
+ExecStopPost=-$SYNC_SCRIPT --trigger=watcher --notify=auto
 
 [Install]
 WantedBy=default.target
